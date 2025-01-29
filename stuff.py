@@ -68,8 +68,7 @@ class ReplayMemory(object):
 class RobotLocomotionEnv(gym.Env):
     def __init__(self):
         # Action space: 5 discrete actions
-        self.robot_action_space = spaces.Discrete(5)
-        self.defender_action_space = spaces.Discrete(5)
+        self.action_space = spaces.Discrete(5)
 
         # Observation space: 8D vector
         # robot pos, adversary pos, robot vel, adversary vel
@@ -181,12 +180,13 @@ class RobotLocomotionEnv(gym.Env):
     
     def dist_between_entities(self):
         position, orientation = p.getBasePositionAndOrientation(self.adj_body)
-        return np.linalg.norm(position - self.target) # distance to origin
+        adv_position, adv_orientation = p.getBasePositionAndOrientation(self.adv_body)
+        return np.linalg.norm(np.array([position[0], position[1]]) - np.array([adv_position[0], adv_position[1]]))
         
 
     def adj_dist_to_target(self):
         position, orientation = p.getBasePositionAndOrientation(self.adj_body)
-        return np.linalg.norm(position - self.target)
+        return np.linalg.norm(np.array([position[0], position[1]]) - self.target)
 
     def get_adversary_reward(self):
         return -self.adj_dist_to_target() + (self.dist_between_entities()/10)
@@ -422,7 +422,7 @@ for i_episode in range(num_episodes):
     for t in count():
         adj_action = select_action(state, "adj")
         adv_action = select_action(state, "adv")
-        observation, adj_reward, adv_reward, terminated, truncated, _ = env.step(adj_action.item(), adv_action.item())
+        observation, adj_reward, adv_reward, terminated, truncated = env.step(adj_action.item(), adv_action.item())
         adj_reward = torch.tensor([adj_reward], device=device)
         adv_reward = torch.tensor([adv_reward], device=device)
         done = terminated or truncated
