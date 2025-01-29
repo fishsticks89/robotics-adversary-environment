@@ -151,8 +151,7 @@ class RobotLocomotionEnv(gym.Env):
             else:
                 raise ValueError("Invalid action")
             return [linear_acc[0], linear_acc[1], 0]
-        
-        print(get_action(adj_action))
+
         p.applyExternalForce(
             objectUniqueId=self.adj_body,
             linkIndex=-1,
@@ -177,26 +176,28 @@ class RobotLocomotionEnv(gym.Env):
         adj_vel, adj_angular_vel = p.getBaseVelocity(self.adj_body)
         adv_vel, adv_angular_vel = p.getBaseVelocity(self.adv_body)
         return [adj_pos[0], adj_pos[1], adj_vel[0], adj_vel[1], adv_pos[0], adv_pos[1], adv_vel[0], adv_vel[1]]
-    
+
     def dist_between_entities(self):
         position, orientation = p.getBasePositionAndOrientation(self.adj_body)
         adv_position, adv_orientation = p.getBasePositionAndOrientation(self.adv_body)
         return np.linalg.norm(np.array([position[0], position[1]]) - np.array([adv_position[0], adv_position[1]]))
-        
+
 
     def adj_dist_to_target(self):
         position, orientation = p.getBasePositionAndOrientation(self.adj_body)
         return np.linalg.norm(np.array([position[0], position[1]]) - self.target)
 
     def get_adversary_reward(self):
-        return -self.adj_dist_to_target() + (self.dist_between_entities()/10)
+        if self.reached_goal():
+            return -self.success_reward
+        return 20 + self.adj_dist_to_target() + (self.dist_between_entities()/10)
 
     def get_agent_reward(self):
         if self.reached_goal():
             return self.success_reward
         else:
-            return -self.adj_dist_to_target() + (self.dist_between_entities()/10)
-    
+            return -self.adj_dist_to_target()
+
     def reached_goal(self):
         return self.adj_dist_to_target() < 0.5
 
@@ -253,7 +254,7 @@ class DQN(nn.Module):
         x = F.relu(self.layer1(x))
         x = F.relu(self.layer2(x))
         return self.layer3(x)
-    
+
 
 # BATCH_SIZE is the number of transitions sampled from the replay buffer
 # GAMMA is the discount factor as mentioned in the previous section
@@ -321,7 +322,7 @@ def plot_durations(show_result=False):
         plt.title('Result')
     else:
         plt.clf()
-        plt.title('Training...')
+        plt.title('Training Agent...')
     plt.xlabel('Episode')
     plt.ylabel('Reward')
     plt.plot(durations_t.numpy())
@@ -337,7 +338,7 @@ def plot_durations(show_result=False):
         plt.title('Result')
     else:
         plt.clf()
-        plt.title('Training...')
+        plt.title('Training Adversary...')
     plt.xlabel('Episode')
     plt.ylabel('Reward')
     plt.plot(durations_t_adv.numpy())
