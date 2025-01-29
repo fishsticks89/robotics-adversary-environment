@@ -82,6 +82,7 @@ class RobotLocomotionEnv(gym.Env):
 
         # Set friction for the box
         p.changeDynamics(self.ag_body, -1, lateralFriction=0.5, spinningFriction=0.5, rollingFriction=0.5)
+        return self.get_state()
 
     def step(self, ag_action, adv_action):
         self.steps += 1
@@ -220,45 +221,77 @@ policy_net_adv.load_state_dict(torch.load("policy_net_adversary.pth", map_locati
 
 import time
 import torch
+import pybullet as p
 
-# Ensure you have already defined/pasted:
-# - env = RobotLocomotionEnv()
-# - policy_net_ag (the learned agent network)
-# - policy_net_adv (optional, if you also needed an adversarial policy network)
-# - device
-# - select_action function if desired, or inline the policy call as shown below.
+# -------------------------------------------------------------------------
+# Define a single constant to control who is user-controlled:
+#   "AGENT"    -> user controls main agent
+#   "ADVERSARY"-> user controls adversary
+#   "NONE"     -> both agent and adversary are controlled by networks
+# -------------------------------------------------------------------------
+CONTROL_MODE = "None"  
 
-# If your environment step is fast, you can slow it down:
-time_step = 1./240.  # Adjust for comfortable visualization
+# -------------------------------------------------------------------------
+# Assume you have defined the following objects/functions above:
+#   env = RobotLocomotionEnv()
+#   policy_net_ag (the learned agent network)
+#   policy_net_adv (the adversarial policy network, if needed)
+#   device
+#   select_action function or inline policy call
+# -------------------------------------------------------------------------
 
-# Before the loop, we reset once
-env.reset()
-state = env.get_state()
+time_step = 1.0 / 240.0  # Adjust for comfortable visualization
+state = env.reset()
 
 while True:
-    # Convert the current state to a Torch tensor
-    state_t = torch.tensor([state], device=device, dtype=torch.float32)
+    # 1) Get an action for the agent
+    if CONTROL_MODE == "AGENT":
+        # Use keyboard for main agent
+        ag_action = 4  # default "do nothing" = 4
+        keys = p.getKeyboardEvents()
 
-    # 1) Policy (agent) picks an action
-    with torch.no_grad():
-        # Take the index of the max Q-value as the chosen action
-        ag_action = policy_net_ag(state_t).max(1).indices.item()
+        if p.B3G_UP_ARROW in keys and keys[p.B3G_UP_ARROW] & p.KEY_IS_DOWN:
+            ag_action = 0  # forward
+        elif p.B3G_DOWN_ARROW in keys and keys[p.B3G_DOWN_ARROW] & p.KEY_IS_DOWN:
+            ag_action = 1  # backward
+        elif p.B3G_LEFT_ARROW in keys and keys[p.B3G_LEFT_ARROW] & p.KEY_IS_DOWN:
+            ag_action = 2  # left
+        elif p.B3G_RIGHT_ARROW in keys and keys[p.B3G_RIGHT_ARROW] & p.KEY_IS_DOWN:
+            ag_action = 3  # right
 
-    # 2) Keyboard (adversary) picks an action
-    # Default to action = 4 ("do nothing")
-    adv_action = 4  
-    keys = p.getKeyboardEvents()
+    else:
+        # Use policy network for main agent
+        state_t = torch.tensor([state], device=device, dtype=torch.float32)
+        with torch.no_grad():
+            ag_action = policy_net_ag(state_t).max(1).indices.item()
 
-    if p.B3G_UP_ARROW in keys and keys[p.B3G_UP_ARROW] & p.KEY_IS_DOWN:
-        adv_action = 0  # forward
-    elif p.B3G_DOWN_ARROW in keys and keys[p.B3G_DOWN_ARROW] & p.KEY_IS_DOWN:
-        adv_action = 1  # backward
-    elif p.B3G_LEFT_ARROW in keys and keys[p.B3G_LEFT_ARROW] & p.KEY_IS_DOWN:
-        adv_action = 2  # left
-    elif p.B3G_RIGHT_ARROW in keys and keys[p.B3G_RIGHT_ARROW] & p.KEY_IS_DOWN:
-        adv_action = 3  # right
+    # 2) Get an action for the adversary
+    if CONTROL_MODE == "ADVERSARY":
+        # Use keyboard for adversary
+        adv_action = 4  # default "do nothing" = 4
+        keys = p.getKeyboardEvents()
 
-    # 3) Take a step in the environment
+        if p.B3G_UP_ARROW in keys and keys[p.B3G_UP_ARROW] & p.KEY_IS_DOWN:
+            adv_action = 0  # forward
+        elif p.B3G_DOWN_ARROW in keys and keys[p.B3G_DOWN_ARROW] & p.KEY_IS_DOWN:
+            adv_action = 1  # backward
+        elif p.B3G_LEFT_ARROW in keys and keys[p.B3G_LEFT_ARROW] & p.KEY_IS_DOWN:
+            adv_action = 2  # left
+        elif p.B3G_RIGHT_ARROW in keys and keys[p.B3G_RIGHT_ARROW] & p.KEY_IS_DOWN:
+            adv_action = 3  # right
+
+    else:
+        # Use (optional) policy network for adversary
+        # If policy_net_adv does not exist or adversary is not needed,
+        # you can choose a default (like 4) or skip entirely.
+        if policy_net_adv is not None:
+            state_t = torch.tensor([state], device=device, dtype=torch.float32)
+            with torch.no_grad():
+                adv_action = policy_net_adv(state_t).max(1).indices.item()
+        else:
+            adv_action = 4  # fallback if no adversarial policy
+
+    # 3) Environment step
     try:
         next_state, ag_reward, adv_reward, reached_goal, done = env.step(ag_action, adv_action)
     except ValueError:
@@ -268,17 +301,12 @@ while True:
         time.sleep(time_step)
         continue
 
-    # 4) Check termination signals
+    # 4) Check terminal conditions
     if reached_goal or done:
-        if reached_goal:
-            print("Goal reached")
-        else:
-            print("Episode finished (max steps). Resetting environment.")
-        env.reset()
-        state = env.get_state()
+        print("Episode finished (goal reached or done). Resetting environment.")
+        state = env.reset()
     else:
-        # If not done, update state
         state = next_state
 
-    # 5) Small sleep for real-time rendering
+    # 5) Sleep to throttle the loop for real-time visualization
     time.sleep(time_step)
