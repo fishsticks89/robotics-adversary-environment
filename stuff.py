@@ -190,13 +190,13 @@ class RobotLocomotionEnv(gym.Env):
     def get_adversary_reward(self):
         if self.reached_goal():
             return -self.success_reward
-        return (-20 + self.ag_dist_to_target() - (self.dist_between_entities()/10))/100
+        return (self.ag_dist_to_target() - (self.dist_between_entities()/2))/16
 
     def get_agent_reward(self):
         if self.reached_goal():
             return self.success_reward
         else:
-            return -self.ag_dist_to_target() / 100
+            return -self.ag_dist_to_target() / 16
 
     def reached_goal(self):
         return self.ag_dist_to_target() < 0.5
