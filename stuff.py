@@ -5,7 +5,7 @@ import random
 import matplotlib
 import matplotlib.pyplot as plt
 # Initialize PyBullet
-p.connect(p.GUI)
+p.connect(p.DIRECT)
 p.setAdditionalSearchPath(pybullet_data.getDataPath())
 
 # Main simulation loop
@@ -78,7 +78,7 @@ class RobotLocomotionEnv(gym.Env):
         self.defender_observation_space = spaces.Box(low=low, high=high, dtype=np.float32)
 
         # Environment constants
-        self.max_steps = 2000
+        self.max_steps = 400
         self.target = np.array([0.0, 0.0])
         self.success_reward = 100
         self.action_cost = -0.1
@@ -117,16 +117,16 @@ class RobotLocomotionEnv(gym.Env):
         # Create a simple box (brick)
         start_pos = [agent_x, agent_y, 0.5]
         start_orientation = [0, 0, 0, 1]  # No rotation (quaternion)
-        self.adj_id = p.createCollisionShape(p.GEOM_BOX, halfExtents=[0.5, 0.5, 0.5])
-        self.adj_body = p.createMultiBody(baseMass=1,
-                                    baseCollisionShapeIndex=self.adj_id,
+        self.ag_id = p.createCollisionShape(p.GEOM_BOX, halfExtents=[0.5, 0.5, 0.5])
+        self.ag_body = p.createMultiBody(baseMass=1,
+                                    baseCollisionShapeIndex=self.ag_id,
                                     basePosition=start_pos,
                                     baseOrientation=start_orientation)
 
         # Set friction for the box
-        p.changeDynamics(self.adj_body, -1, lateralFriction=0.5, spinningFriction=0.5, rollingFriction=0.5)
+        p.changeDynamics(self.ag_body, -1, lateralFriction=0.5, spinningFriction=0.5, rollingFriction=0.5)
 
-    def step(self, adj_action, adv_action):
+    def step(self, ag_action, adv_action):
         self.steps += 1
         if self.steps > self.max_steps or self.reached_goal():
             raise ValueError("Max steps reached")
@@ -153,10 +153,10 @@ class RobotLocomotionEnv(gym.Env):
             return [linear_acc[0], linear_acc[1], 0]
 
         p.applyExternalForce(
-            objectUniqueId=self.adj_body,
+            objectUniqueId=self.ag_body,
             linkIndex=-1,
-            forceObj=get_action(adj_action),
-            posObj=p.getBasePositionAndOrientation(self.adj_body)[0],
+            forceObj=get_action(ag_action),
+            posObj=p.getBasePositionAndOrientation(self.ag_body)[0],
             flags=p.WORLD_FRAME,
         )
         p.applyExternalForce(
@@ -171,35 +171,35 @@ class RobotLocomotionEnv(gym.Env):
         return state, self.get_agent_reward(), self.get_adversary_reward(), self.reached_goal(), self.steps >= self.max_steps
 
     def get_state(self):
-        adj_pos, adj_orientation = p.getBasePositionAndOrientation(self.adj_body)
+        ag_pos, ag_orientation = p.getBasePositionAndOrientation(self.ag_body)
         adv_pos, adv_orientation = p.getBasePositionAndOrientation(self.adv_body)
-        adj_vel, adj_angular_vel = p.getBaseVelocity(self.adj_body)
+        ag_vel, ag_angular_vel = p.getBaseVelocity(self.ag_body)
         adv_vel, adv_angular_vel = p.getBaseVelocity(self.adv_body)
-        return [adj_pos[0], adj_pos[1], adj_vel[0], adj_vel[1], adv_pos[0], adv_pos[1], adv_vel[0], adv_vel[1]]
+        return [ag_pos[0], ag_pos[1], ag_vel[0], ag_vel[1], adv_pos[0], adv_pos[1], adv_vel[0], adv_vel[1]]
 
     def dist_between_entities(self):
-        position, orientation = p.getBasePositionAndOrientation(self.adj_body)
+        position, orientation = p.getBasePositionAndOrientation(self.ag_body)
         adv_position, adv_orientation = p.getBasePositionAndOrientation(self.adv_body)
         return np.linalg.norm(np.array([position[0], position[1]]) - np.array([adv_position[0], adv_position[1]]))
 
 
-    def adj_dist_to_target(self):
-        position, orientation = p.getBasePositionAndOrientation(self.adj_body)
+    def ag_dist_to_target(self):
+        position, orientation = p.getBasePositionAndOrientation(self.ag_body)
         return np.linalg.norm(np.array([position[0], position[1]]) - self.target)
 
     def get_adversary_reward(self):
         if self.reached_goal():
             return -self.success_reward
-        return 20 + self.adj_dist_to_target() + (self.dist_between_entities()/10)
+        return (-20 + self.ag_dist_to_target() - (self.dist_between_entities()/10))/100
 
     def get_agent_reward(self):
         if self.reached_goal():
             return self.success_reward
         else:
-            return -self.adj_dist_to_target()
+            return -self.ag_dist_to_target() / 100
 
     def reached_goal(self):
-        return self.adj_dist_to_target() < 0.5
+        return self.ag_dist_to_target() < 0.5
 
 env = RobotLocomotionEnv()
 
@@ -223,7 +223,7 @@ device = torch.device(
 )
 
 Transition = namedtuple('Transition',
-                        ('state', 'adj_action', 'adv_action', 'next_state', 'adj_reward', 'adv_reward'))
+                        ('state', 'ag_action', 'adv_action', 'next_state', 'ag_reward', 'adv_reward'))
 
 class ReplayMemory(object):
 
@@ -263,7 +263,7 @@ class DQN(nn.Module):
 # EPS_DECAY controls the rate of exponential decay of epsilon, higher means a slower decay
 # TAU is the update rate of the target network
 # LR is the learning rate of the ``AdamW`` optimizer
-BATCH_SIZE = 128
+BATCH_SIZE = 128 * 2 #! CHANGEd
 GAMMA = 0.99
 EPS_START = 0.9
 EPS_END = 0.05
@@ -279,10 +279,10 @@ env.reset()
 state = env.get_state()
 n_observations = len(state)
 
-policy_net_adj = DQN(n_observations, n_actions).to(device)
-target_net_adj = DQN(n_observations, n_actions).to(device)
-target_net_adj.load_state_dict(policy_net_adj.state_dict())
-optimizer_adj = optim.AdamW(policy_net_adj.parameters(), lr=LR, amsgrad=True)
+policy_net_ag = DQN(n_observations, n_actions).to(device)
+target_net_ag = DQN(n_observations, n_actions).to(device)
+target_net_ag.load_state_dict(policy_net_ag.state_dict())
+optimizer_ag = optim.AdamW(policy_net_ag.parameters(), lr=LR, amsgrad=True)
 
 policy_net_adv = DQN(n_observations, n_actions).to(device)
 target_net_adv = DQN(n_observations, n_actions).to(device)
@@ -304,19 +304,19 @@ def select_action(state, agent):
             # t.max(1) will return the largest column value of each row.
             # second column on max result is index of where max element was
             # found, so we pick action with the larger expected reward.
-            if agent == "adj":
-                return policy_net_adj(state).max(1).indices.view(1, 1)
+            if agent == "ag":
+                return policy_net_ag(state).max(1).indices.view(1, 1)
             else:
                 return policy_net_adv(state).max(1).indices.view(1, 1)
     else:
         return torch.tensor([[env.action_space.sample()]], device=device, dtype=torch.long)
 
-episode_rewards_adj = []
+episode_rewards_ag = []
 episode_rewards_adv = []
 
 def plot_durations(show_result=False):
     plt.figure(1)
-    durations_t = torch.tensor(episode_rewards_adj, dtype=torch.float)
+    durations_t = torch.tensor(episode_rewards_ag, dtype=torch.float)
     durations_t_adv = torch.tensor(episode_rewards_adv, dtype=torch.float)
     if show_result:
         plt.title('Result')
@@ -367,16 +367,16 @@ def optimize_model():
     non_final_next_states = torch.cat([s for s in batch.next_state
                                                 if s is not None])
     state_batch = torch.cat(batch.state)
-    adj_action_batch = torch.cat(batch.adj_action)
+    ag_action_batch = torch.cat(batch.ag_action)
     adv_action_batch = torch.cat(batch.adv_action)
-    adj_reward_batch = torch.cat(batch.adj_reward)
+    ag_reward_batch = torch.cat(batch.ag_reward)
     adv_reward_batch = torch.cat(batch.adv_reward)
 
     # Compute Q(s_t, a) - the model computes Q(s_t), then we select the
     # columns of actions taken. These are the actions which would've been taken
     # for each batch state according to policy_net
     adv_state_action_values = policy_net_adv(state_batch).gather(1, adv_action_batch)
-    adj_state_action_values = policy_net_adj(state_batch).gather(1, adj_action_batch)
+    ag_state_action_values = policy_net_ag(state_batch).gather(1, ag_action_batch)
 
     # Compute V(s_{t+1}) for all next states.
     # Expected values of actions for non_final_next_states are computed based
@@ -386,25 +386,25 @@ def optimize_model():
     adv_next_state_values = torch.zeros(BATCH_SIZE, device=device)
     with torch.no_grad():
         adv_next_state_values[non_final_mask] = target_net_adv(non_final_next_states).max(1).values
-    adj_next_state_values = torch.zeros(BATCH_SIZE, device=device)
+    ag_next_state_values = torch.zeros(BATCH_SIZE, device=device)
     with torch.no_grad():
-        adj_next_state_values[non_final_mask] = target_net_adj(non_final_next_states).max(1).values
+        ag_next_state_values[non_final_mask] = target_net_ag(non_final_next_states).max(1).values
     # Compute the expected Q values
     adv_expected_state_action_values = (adv_next_state_values * GAMMA) + adv_reward_batch
-    adj_expected_state_action_values = (adj_next_state_values * GAMMA) + adj_reward_batch
+    ag_expected_state_action_values = (ag_next_state_values * GAMMA) + ag_reward_batch
 
     # Compute Huber loss
     criterion = nn.SmoothL1Loss()
     adv_loss = criterion(adv_state_action_values, adv_expected_state_action_values.unsqueeze(1))
-    adj_loss = criterion(adj_state_action_values, adj_expected_state_action_values.unsqueeze(1))
+    ag_loss = criterion(ag_state_action_values, ag_expected_state_action_values.unsqueeze(1))
 
     # Optimize the model
     optimizer_adv.zero_grad()
     adv_loss.backward()
     optimizer_adv.step()
-    optimizer_adj.zero_grad()
-    adj_loss.backward()
-    optimizer_adj.step()
+    optimizer_ag.zero_grad()
+    ag_loss.backward()
+    optimizer_ag.step()
 
 if torch.cuda.is_available() or torch.backends.mps.is_available():
     num_episodes = 600
@@ -417,17 +417,17 @@ for i_episode in range(num_episodes):
     state = env.get_state()
     state = torch.tensor(state, dtype=torch.float32, device=device).unsqueeze(0)
 
-    total_adj_reward = 0
+    total_ag_reward = 0
     total_adv_reward = 0
 
     for t in count():
-        adj_action = select_action(state, "adj")
+        ag_action = select_action(state, "ag")
         adv_action = select_action(state, "adv")
-        observation, adj_reward, adv_reward, terminated, truncated = env.step(adj_action.item(), adv_action.item())
-        adj_reward = torch.tensor([adj_reward], device=device)
+        observation, ag_reward, adv_reward, terminated, truncated = env.step(ag_action.item(), adv_action.item())
+        ag_reward = torch.tensor([ag_reward], device=device)
         adv_reward = torch.tensor([adv_reward], device=device)
         done = terminated or truncated
-        total_adj_reward += adj_reward
+        total_ag_reward += ag_reward
         total_adv_reward += adv_reward
 
         if terminated:
@@ -436,7 +436,7 @@ for i_episode in range(num_episodes):
             next_state = torch.tensor(observation, dtype=torch.float32, device=device).unsqueeze(0)
 
         # Store the transition in memory
-        memory.push(state, adj_action, adv_action, next_state, adj_reward, adv_reward)
+        memory.push(state, ag_action, adv_action, next_state, ag_reward, adv_reward)
 
         # Move to the next state
         state = next_state
@@ -446,11 +446,11 @@ for i_episode in range(num_episodes):
 
         # Soft update of the target network's weights
         # θ′ ← τ θ + (1 −τ )θ′
-        adj_target_net_state_dict = target_net_adj.state_dict()
-        adj_policy_net_state_dict = policy_net_adj.state_dict()
-        for key in adj_policy_net_state_dict:
-            adj_target_net_state_dict[key] = adj_policy_net_state_dict[key]*TAU + adj_target_net_state_dict[key]*(1-TAU)
-        target_net_adj.load_state_dict(adj_target_net_state_dict)
+        ag_target_net_state_dict = target_net_ag.state_dict()
+        ag_policy_net_state_dict = policy_net_ag.state_dict()
+        for key in ag_policy_net_state_dict:
+            ag_target_net_state_dict[key] = ag_policy_net_state_dict[key]*TAU + ag_target_net_state_dict[key]*(1-TAU)
+        target_net_ag.load_state_dict(ag_target_net_state_dict)
 
         adv_target_net_state_dict = target_net_adv.state_dict()
         adv_policy_net_state_dict = policy_net_adv.state_dict()
@@ -459,10 +459,10 @@ for i_episode in range(num_episodes):
         target_net_adv.load_state_dict(adv_target_net_state_dict)
 
         if done:
-            episode_rewards_adj.append(total_adj_reward)
+            episode_rewards_ag.append(total_ag_reward)
             episode_rewards_adv.append(total_adv_reward)
-            if (i_episode % 10) == 0:
-              plot_durations()
+            # if (i_episode % 5) == 0:
+            plot_durations()
             break
 
 print('Complete')
